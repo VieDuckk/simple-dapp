@@ -1,0 +1,87 @@
+.userAccount {
+    font-size: 20px;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 15px;
+    color: #333;
+  }
+  
+  .selectedWallet {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    max-width: 400px;
+    margin: auto;
+  }
+  
+  .selectedWallet img {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    margin-bottom: 10px;
+  }
+  
+  .selectedWallet div {
+    font-size: 16px;
+    margin: 5px 0;
+    color: #444;
+  }
+  
+  .selectedWallet strong {
+    font-weight: bold;
+    color: #000;
+  }
+  
+  button {
+    background: #ff4d4d;
+    color: white;
+    padding: 10px 15px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    margin-top: 15px;
+    transition: background 0.3s ease;
+  }
+  
+  button:hover {
+    background: #cc0000;
+  }
+  .modalOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  
+  .modal {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    width: 400px;
+    max-width: 90%;
+  }
+  
+  .modal label {
+    display: block;
+    margin: 10px 0;
+  }
+  
+  .modal input {
+    width: 100%;
+    padding: 8px;
+    margin-top: 5px;
+  }
+  
+  .modal button {
+    margin: 10px 5px 0 0;
+  }
