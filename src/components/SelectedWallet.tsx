@@ -10,8 +10,8 @@ export const SelectedWallet = () => {
     getBalance,
     transferNativeToken,
     signMessage,
-    errorMessage, // Thêm errorMessage từ context
-    clearError, // Thêm clearError để xóa thông báo khi cần
+    errorMessage,
+    clearError,
   } = useWalletProvider();
   const [balance, setBalance] = useState<string>("0");
   const [isModalOpen, setIsModalOpen] = useState(false);

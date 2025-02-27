@@ -5,6 +5,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { ethers } from "ethers";
 
 type SelectedAccountByWallet = Record<string, string | null>;
 
@@ -27,7 +28,6 @@ declare global {
   }
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
 export const WalletProviderContext = createContext<WalletProviderContext>({
   wallets: {},
   selectedWallet: null,
@@ -50,11 +50,12 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
   );
   const [selectedAccountByWalletRdns, setSelectedAccountByWalletRdns] =
     useState<SelectedAccountByWallet>({});
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const [errorMessage, setErrorMessage] = useState("");
-  const clearError = () => setErrorMessage("");
-  const setError = (error: string) => setErrorMessage(error);
+  const clearError = useCallback(() => setErrorMessage(null), []);
+  const setError = useCallback((error: string) => setErrorMessage(error), []);
 
+  // Tách logic khởi tạo ví sang useEffect riêng
   useEffect(() => {
     const savedSelectedWalletRdns = localStorage.getItem("selectedWalletRdns");
     const savedSelectedAccountByWalletRdns = localStorage.getItem(
@@ -88,6 +89,76 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
       window.removeEventListener("eip6963:announceProvider", onAnnouncement);
   }, []);
 
+  // Logic lắng nghe sự kiện của ethersProvider
+  useEffect(() => {
+    let ethersProvider: ethers.providers.Web3Provider | null = null;
+
+    const handleAccountsChanged = (accounts: string[]) => {
+      if (selectedWalletRdns && accounts.length > 0) {
+        setSelectedAccountByWalletRdns((currentAccounts) => {
+          const newAccounts = {
+            ...currentAccounts,
+            [selectedWalletRdns]: accounts[0],
+          };
+          localStorage.setItem(
+            "selectedAccountByWalletRdns",
+            JSON.stringify(newAccounts)
+          );
+          return newAccounts;
+        });
+      } else if (accounts.length === 0) {
+        disconnectWallet();
+      }
+    };
+
+    const handleChainChanged = (chainId: string) => {
+      console.log(`Chain changed to: ${chainId}`);
+      const sepoliaChainId = "0xaa36a7";
+      if (chainId !== sepoliaChainId) {
+        setErrorMessage("Please switch back to Sepolia Testnet.");
+      } else {
+        clearError();
+      }
+    };
+
+    if (selectedWalletRdns && wallets[selectedWalletRdns]) {
+      ethersProvider = new ethers.providers.Web3Provider(
+        wallets[selectedWalletRdns].provider
+      );
+      ethersProvider.on("accountsChanged", handleAccountsChanged);
+      ethersProvider.on("chainChanged", handleChainChanged);
+    }
+
+    // Cleanup khi selectedWalletRdns thay đổi hoặc component unmount
+    return () => {
+      if (ethersProvider) {
+        ethersProvider.removeListener("accountsChanged", handleAccountsChanged);
+        ethersProvider.removeListener("chainChanged", handleChainChanged);
+      }
+    };
+  }, [selectedWalletRdns, wallets]); // Chỉ phụ thuộc vào selectedWalletRdns và wallets
+
+  const disconnectWallet = useCallback(async () => {
+    if (selectedWalletRdns) {
+      setSelectedAccountByWalletRdns((currentAccounts) => ({
+        ...currentAccounts,
+        [selectedWalletRdns]: null,
+      }));
+      setSelectedWalletRdns(null);
+      localStorage.removeItem("selectedWalletRdns");
+
+      const wallet = wallets[selectedWalletRdns];
+      try {
+        await wallet.provider.request({
+          method: "wallet_revokePermissions",
+          params: [{ eth_accounts: {} }],
+        });
+      } catch (error) {
+        console.error("Failed to revoke permissions:", error);
+      }
+    }
+  }, [selectedWalletRdns, wallets]);
+
   const connectWallet = useCallback(
     async (walletRdns: string) => {
       try {
@@ -102,7 +173,6 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
             ...currentAccounts,
             [wallet.info.rdns]: accounts[0],
           }));
-
           localStorage.setItem("selectedWalletRdns", wallet.info.rdns);
           localStorage.setItem(
             "selectedAccountByWalletRdns",
@@ -114,7 +184,7 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
         }
       } catch (error) {
         console.error("Failed to connect to provider:", error);
-        const walletError: WalletError = error as WalletError;
+        const walletError = error as any;
         setError(
           `Code: ${walletError.code} \nError Message: ${walletError.message}`
         );
@@ -123,57 +193,6 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
     [wallets, selectedAccountByWalletRdns]
   );
 
-  const disconnectWallet = useCallback(async () => {
-    if (selectedWalletRdns) {
-      setSelectedAccountByWalletRdns((currentAccounts) => ({
-        ...currentAccounts,
-        [selectedWalletRdns]: null,
-      }));
-
-      const wallet = wallets[selectedWalletRdns];
-      setSelectedWalletRdns(null);
-      localStorage.removeItem("selectedWalletRdns");
-
-      try {
-        await wallet.provider.request({
-          method: "wallet_revokePermissions",
-          params: [{ eth_accounts: {} }],
-        });
-      } catch (error) {
-        console.error("Failed to revoke permissions:", error);
-      }
-    }
-  }, [selectedWalletRdns, wallets]);
-  //   const ensureSepoliaNetwork = useCallback(async () => {
-  //     if (!selectedWalletRdns || !wallets[selectedWalletRdns]) {
-  //       setErrorMessage("No wallet selected");
-  //       return false;
-  //     }
-
-  //     const wallet = wallets[selectedWalletRdns];
-  //     try {
-  //       // Lấy chain ID hiện tại
-  //       const chainId = (await wallet.provider.request({
-  //         method: "eth_chainId",
-  //       })) as string;
-
-  //       const sepoliaChainId = "0xaa36a7"; // Chain ID của Sepolia (11155111 trong hex)
-  //       if (chainId !== sepoliaChainId) {
-  //         // Yêu cầu chuyển sang Sepolia
-  //         await wallet.provider.request({
-  //           method: "wallet_switchEthereumChain",
-  //           params: [{ chainId: sepoliaChainId }],
-  //         });
-  //       }
-  //       return true;
-  //     } catch (error) {
-  //       console.error("Failed to switch to Sepolia:", error);
-  //       setErrorMessage(
-  //         "Please switch to Sepolia Testnet manually in your wallet."
-  //       );
-  //       return false;
-  //     }
-  //   }, [wallets, selectedWalletRdns]);
   const getBalance = useCallback(
     async (account: string): Promise<string> => {
       if (!selectedWalletRdns || !wallets[selectedWalletRdns] || !account) {
@@ -183,13 +202,11 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
 
       try {
         const wallet = wallets[selectedWalletRdns];
-
-        // Lấy chain ID hiện tại
         const chainId = (await wallet.provider.request({
           method: "eth_chainId",
         })) as string;
 
-        const sepoliaChainId = "0xaa36a7"; // Chain ID của Sepolia (11155111 trong hex)
+        const sepoliaChainId = "0xaa36a7";
         if (chainId !== sepoliaChainId) {
           setErrorMessage("Please switch to Sepolia Testnet in your wallet.");
           return "0";
@@ -212,6 +229,7 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
     },
     [wallets, selectedWalletRdns]
   );
+
   const transferNativeToken = useCallback(
     async (toAddress: string, amount: string): Promise<string> => {
       if (!selectedWalletRdns || !wallets[selectedWalletRdns]) {
@@ -240,6 +258,7 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
     },
     [wallets, selectedWalletRdns, selectedAccountByWalletRdns]
   );
+
   const signMessage = useCallback(
     async (message: string): Promise<string> => {
       if (!selectedWalletRdns || !wallets[selectedWalletRdns]) {
