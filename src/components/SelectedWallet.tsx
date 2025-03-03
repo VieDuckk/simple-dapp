@@ -10,6 +10,8 @@ export const SelectedWallet = () => {
     getBalance,
     transferNativeToken,
     signMessage,
+    transferERC20,
+    approveERC20, // Thêm hàm approveERC20
     errorMessage,
     clearError,
   } = useWalletProvider();
@@ -17,8 +19,9 @@ export const SelectedWallet = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [toAddress, setToAddress] = useState("");
   const [amount, setAmount] = useState("");
+  const [tokenAddress, setTokenAddress] = useState("");
   const [message, setMessage] = useState("");
-  const [txType, setTxType] = useState<"native" | "sign" | null>(null);
+  const [txType, setTxType] = useState<"native" | "erc20" | "sign" | "approve" | null>(null); // Thêm "approve"
   const [txResult, setTxResult] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,7 +31,7 @@ export const SelectedWallet = () => {
           const accountBalance = await getBalance(selectedAccount);
           setBalance(accountBalance);
         } catch (error) {
-          console.error("Error fetching balance:", error);
+          console.error("Failed to fetch balance:", error);
           setBalance("Error");
         }
       } else {
@@ -43,18 +46,22 @@ export const SelectedWallet = () => {
       let result: string;
       if (txType === "native") {
         result = await transferNativeToken(toAddress, amount);
+      } else if (txType === "erc20") {
+        result = await transferERC20(tokenAddress, toAddress, amount);
       } else if (txType === "sign") {
         result = await signMessage(message);
+      } else if (txType === "approve") {
+        result = await approveERC20(tokenAddress, toAddress, amount);
       } else {
         return;
       }
       setTxResult(result);
     } catch (error) {
-      setTxResult(error as string);
+      setTxResult(`Error: ${(error as Error).message}`);
     }
   };
 
-  const openModal = (type: "native" | "sign") => {
+  const openModal = (type: "native" | "erc20" | "sign" | "approve") => {
     setTxType(type);
     setIsModalOpen(true);
     setTxResult(null);
@@ -64,6 +71,7 @@ export const SelectedWallet = () => {
     setIsModalOpen(false);
     setToAddress("");
     setAmount("");
+    setTokenAddress("");
     setMessage("");
     setTxType(null);
   };
@@ -71,7 +79,7 @@ export const SelectedWallet = () => {
   return (
     <>
       <h2 className={styles.userAccount}>
-        {selectedAccount ? "" : "No "}Wallet Selected
+        {selectedAccount ? "" : "No "}Wallet selected
       </h2>
       {selectedAccount && (
         <>
@@ -91,13 +99,13 @@ export const SelectedWallet = () => {
               <strong>rdns:</strong> {selectedWallet?.info.rdns}
             </div>
             <div>
-              <strong>balance:</strong> {balance} Sepolia ETH
+              <strong>Balance:</strong> {balance} Sepolia ETH
             </div>
           </div>
           {errorMessage && (
             <div className={styles.errorMessage}>
               {errorMessage}
-              <button onClick={clearError}>Dismiss</button>
+              <button onClick={clearError}>Close error</button>
             </div>
           )}
           <div
@@ -108,7 +116,7 @@ export const SelectedWallet = () => {
             }}
           >
             <button onClick={disconnectWallet} style={{ margin: "auto" }}>
-              Disconnect Wallet
+              Disconnect
             </button>
             <button
               onClick={() => openModal("native")}
@@ -117,10 +125,22 @@ export const SelectedWallet = () => {
               Transfer Native Token
             </button>
             <button
+              onClick={() => openModal("erc20")}
+              style={{ margin: "auto" }}
+            >
+              Transfer ERC20 Token
+            </button>
+            <button
+              onClick={() => openModal("approve")} // Thêm nút Approve
+              style={{ margin: "auto" }}
+            >
+              Approve ERC20 Token
+            </button>
+            <button
               onClick={() => openModal("sign")}
               style={{ margin: "auto" }}
             >
-              Sign Message
+              Sign message
             </button>
           </div>
         </>
@@ -130,12 +150,18 @@ export const SelectedWallet = () => {
         <div className={styles.modalOverlay}>
           <div className={styles.modal}>
             <h3>
-              {txType === "native" ? "Transfer Native Token" : "Sign Message"}
+              {txType === "native"
+                ? "Transfer Native Token"
+                : txType === "erc20"
+                ? "Transfer ERC20 Token"
+                : txType === "approve"
+                ? "Approve ERC20 Token"
+                : "Sign message"}
             </h3>
             {txType === "native" && (
               <>
                 <label>
-                  To Address:
+                  To address:
                   <input
                     type="text"
                     value={toAddress}
@@ -144,6 +170,34 @@ export const SelectedWallet = () => {
                 </label>
                 <label>
                   Amount (Sepolia ETH):
+                  <input
+                    type="text"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                  />
+                </label>
+              </>
+            )}
+            {(txType === "erc20" || txType === "approve") && (
+              <>
+                <label>
+                  Token address:
+                  <input
+                    type="text"
+                    value={tokenAddress}
+                    onChange={(e) => setTokenAddress(e.target.value)}
+                  />
+                </label>
+                <label>
+                  To:
+                  <input
+                    type="text"
+                    value={toAddress}
+                    onChange={(e) => setToAddress(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Amount:
                   <input
                     type="text"
                     value={amount}
@@ -162,11 +216,13 @@ export const SelectedWallet = () => {
                 />
               </label>
             )}
-            <button onClick={handleTransaction}>Execute</button>
+            <button onClick={handleTransaction}>
+              {txType === "approve" ? "Approve" : "Transfer"}
+            </button>
             <button onClick={closeModal}>Close</button>
             {txResult && (
               <p>
-                Result:{" "}
+                Transaction:{" "}
                 <div style={{ width: "100%", wordBreak: "break-all" }}>
                   {txResult}
                 </div>

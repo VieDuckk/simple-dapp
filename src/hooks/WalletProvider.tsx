@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   PropsWithChildren,
   createContext,
@@ -5,10 +7,20 @@ import {
   useEffect,
   useState,
 } from "react";
-import { ethers } from "ethers";
-
+import { BigNumber, ethers } from "ethers";
+const calculateGasMargin = (value: BigNumber): BigNumber => {
+  return value.mul(11).div(10); 
+};
 type SelectedAccountByWallet = Record<string, string | null>;
-
+async function isContract(provider: ethers.providers.Provider, address: string): Promise<boolean> {
+  try {
+    const code = await provider.getCode(address);
+    return code !== "0x" && code !== "0x0";
+  } catch (error) {
+    console.error("Lỗi khi kiểm tra hợp đồng:", error);
+    return false;
+  }
+}
 interface WalletProviderContext {
   wallets: Record<string, EIP6963ProviderDetail>;
   selectedWallet: EIP6963ProviderDetail | null;
@@ -20,8 +32,16 @@ interface WalletProviderContext {
   getBalance: (account: string) => Promise<string>;
   transferNativeToken: (toAddress: string, amount: string) => Promise<string>;
   signMessage: (message: string) => Promise<string>;
+  approveERC20: (tokenAddress: string, spender: string, amount: string) => Promise<string>;
+  transferERC20: (tokenAddress: string, toAddress: string, amount: string) => Promise<string>;
 }
-
+const ERC20_ABI = [
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function safeTransfer(address to, uint256 amount) returns (bool)",
+  "function balanceOf(address account) returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) returns (uint256)"
+];
 declare global {
   interface WindowEventMap {
     "eip6963:announceProvider": CustomEvent;
@@ -39,6 +59,8 @@ export const WalletProviderContext = createContext<WalletProviderContext>({
   getBalance: async () => "0",
   transferNativeToken: async () => "",
   signMessage: async () => "",
+  approveERC20: async () => "",
+  transferERC20: async () => ""
 });
 
 export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
@@ -55,7 +77,6 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
   const clearError = useCallback(() => setErrorMessage(null), []);
   const setError = useCallback((error: string) => setErrorMessage(error), []);
 
-  // Tách logic khởi tạo ví sang useEffect riêng
   useEffect(() => {
     const savedSelectedWalletRdns = localStorage.getItem("selectedWalletRdns");
     const savedSelectedAccountByWalletRdns = localStorage.getItem(
@@ -89,7 +110,6 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
       window.removeEventListener("eip6963:announceProvider", onAnnouncement);
   }, []);
 
-  // Logic lắng nghe sự kiện của ethersProvider
   useEffect(() => {
     let ethersProvider: ethers.providers.Web3Provider | null = null;
 
@@ -112,7 +132,6 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
     };
 
     const handleChainChanged = (chainId: string) => {
-      console.log(`Chain changed to: ${chainId}`);
       const sepoliaChainId = "0xaa36a7";
       if (chainId !== sepoliaChainId) {
         setErrorMessage("Please switch back to Sepolia Testnet.");
@@ -129,14 +148,13 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
       ethersProvider.on("chainChanged", handleChainChanged);
     }
 
-    // Cleanup khi selectedWalletRdns thay đổi hoặc component unmount
     return () => {
       if (ethersProvider) {
         ethersProvider.removeListener("accountsChanged", handleAccountsChanged);
         ethersProvider.removeListener("chainChanged", handleChainChanged);
       }
     };
-  }, [selectedWalletRdns, wallets]); // Chỉ phụ thuộc vào selectedWalletRdns và wallets
+  }, [selectedWalletRdns, wallets]);
 
   const disconnectWallet = useCallback(async () => {
     if (selectedWalletRdns) {
@@ -281,7 +299,170 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
     },
     [wallets, selectedWalletRdns, selectedAccountByWalletRdns]
   );
-
+ 
+  const approveERC20 = useCallback(
+    async (tokenAddress: string, spender: string, amount: string): Promise<string> => {
+      if (!selectedWalletRdns || !wallets[selectedWalletRdns]) {
+        setErrorMessage("Không có ví được chọn");
+        throw new Error("Không có ví được chọn");
+      }
+  
+      try {
+        const wallet = wallets[selectedWalletRdns];
+        const provider = new ethers.providers.Web3Provider(wallet.provider);
+        const signer = provider.getSigner();
+        const contract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+        
+        // Kiểm tra xem tokenAddress có phải là hợp đồng không
+        if (!(await isContract(provider, tokenAddress))) {
+          setErrorMessage("Địa chỉ token không phải là hợp đồng");
+          throw new Error("Địa chỉ token không phải là hợp đồng");
+        }
+  
+        // Chuyển amount sang wei
+        const amountWei = ethers.utils.parseUnits(amount, 18);
+        const owner = selectedAccountByWalletRdns[selectedWalletRdns]!;
+        
+        // Lấy thông tin gas
+        const gasPrice = await provider.getGasPrice();
+        const ethBalance = BigNumber.from(await provider.getBalance(owner));
+        
+        // Ước tính gas cho giao dịch approve
+        let gasEstimate: BigNumber;
+        try {
+          gasEstimate = await contract.estimateGas.approve(spender, amountWei);
+        } catch (error) {
+          console.error("Failed to estimate gas for approve:", error);
+          setErrorMessage("Không thể ước tính gas cho approve");
+          throw error;
+        }
+  
+        // Tính toán gas margin
+        const gasLimit = calculateGasMargin(gasEstimate);
+        const gasCost = gasLimit.mul(gasPrice);
+  
+        // Kiểm tra số dư ETH để trả phí gas
+        if (ethBalance.lt(gasCost)) {
+          setErrorMessage(
+            `Không đủ ETH để trả phí gas: cần ${ethers.utils.formatEther(gasCost)} ETH`
+          );
+          throw new Error("Không đủ ETH để trả phí gas");
+        }
+  
+        // Thực hiện approve với amount truyền vào
+        const tx = await contract.approve(spender, amountWei, {
+          gasLimit: gasLimit,
+        });
+        
+        await tx.wait();
+        return tx.hash;
+      } catch (error) {
+        console.error("Không thể phê duyệt token ERC20:", error);
+        setErrorMessage(`Không thể phê duyệt token ERC20: ${(error as Error).message}`);
+        throw error;
+      }
+    },
+    [wallets, selectedWalletRdns, selectedAccountByWalletRdns]
+  );
+  
+  const transferERC20 = useCallback(
+    async (tokenAddress: string, toAddress: string, amount: string): Promise<string> => {
+      if (!selectedWalletRdns || !wallets[selectedWalletRdns]) {
+        setErrorMessage("Không có ví được chọn");
+        throw new Error("Không có ví được chọn");
+      }
+  
+      try {
+        const wallet = wallets[selectedWalletRdns];
+        const provider = new ethers.providers.Web3Provider(wallet.provider);
+        const signer = provider.getSigner();
+        const contractRead = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+        const contractWrite = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+        
+        if (!(await isContract(provider, tokenAddress))) {
+          setErrorMessage("This is not a contract address");                                                                                                         
+          throw new Error("This is not a contract address");
+        }
+  
+        const amountWei = ethers.utils.parseUnits(amount, 18);
+        const owner = selectedAccountByWalletRdns[selectedWalletRdns]!;
+        
+        let allowanceRaw: string;
+        try {
+          allowanceRaw = await contractRead.callStatic.allowance(owner, toAddress);
+        } catch (error) {
+          throw new Error("Cannot take allowance from contract");
+        }
+        const currentAllowance = BigNumber.from(allowanceRaw);
+        
+        if (currentAllowance.lt(amountWei)) {
+          await approveERC20(tokenAddress, toAddress, amount);
+          
+          let newAllowanceRaw: string;
+          try {
+            newAllowanceRaw = await contractRead.callStatic.allowance(owner, toAddress);
+          } catch (error) {
+            throw new Error("Cannot confirm allowance after approved");
+          }
+          const newAllowance = BigNumber.from(newAllowanceRaw);
+          if (newAllowance.lt(amountWei)) {
+            throw new Error("Not enough allowance");
+          }
+        }
+        
+        // Kiểm tra số dư token trước
+        let tokenBalanceRaw: string;
+        try {
+          tokenBalanceRaw = await contractRead.callStatic.balanceOf(owner);
+        } catch (error) {
+          throw new Error("Cannot take balance from contract");
+        }
+        const tokenBalance = BigNumber.from(tokenBalanceRaw);
+        if (tokenBalance.lt(amountWei)) {
+          setErrorMessage(
+            `Not enough LINK");: need ${ethers.utils.formatUnits(amountWei, 18)} LINK but just have ${ethers.utils.formatUnits(tokenBalance, 18)} LINK`
+          );
+          throw new Error("Not enough LINK");
+        }
+  
+        // Tính phí gas
+        const gasPrice = await provider.getGasPrice();
+        let gasEstimate: BigNumber;
+        try {
+          gasEstimate = await contractWrite.estimateGas.transfer(toAddress, amountWei);
+        } catch (error) {
+          console.error("Failed to estimate gas:", error);
+          setErrorMessage("Failed to estimate gas");
+          throw error;
+        }
+        const gasCost = gasEstimate.mul(gasPrice);
+        const gasCostEth = ethers.utils.formatEther(gasCost);
+        
+        const ethBalance = BigNumber.from(await provider.getBalance(owner));
+        if (ethBalance.lt(gasCost)) {
+          setErrorMessage(
+            `Not enough gas: cần ${gasCostEth} ETH but just have ${ethers.utils.formatEther(ethBalance)} ETH`
+          );
+          throw new Error("Not enough gas");
+        }
+  
+        // Thực hiện giao dịch
+        const tx = await contractWrite.transfer(toAddress, amountWei, {
+          gasLimit: calculateGasMargin(gasEstimate),
+        });
+        console.log(`Transfering ${amount} LINK with gas about ${gasCostEth} ETH`);
+        
+        await tx.wait();
+        return tx.hash;
+      } catch (error) {
+        console.error("Cannot transfer token ERC20:", error);
+        console.error("Detail error:", JSON.stringify(error));
+        setErrorMessage(`Cannot transfer token ERC20: ${(error as Error).message}`);
+        throw error;
+      }
+    },
+    [wallets, selectedWalletRdns, selectedAccountByWalletRdns, approveERC20]
+  );
   const contextValue: WalletProviderContext = {
     wallets,
     selectedWallet:
@@ -297,6 +478,8 @@ export const WalletProvider: React.FC<PropsWithChildren> = ({ children }) => {
     getBalance,
     transferNativeToken,
     signMessage,
+    approveERC20,
+    transferERC20
   };
 
   return (
